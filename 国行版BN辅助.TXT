@@ -1,0 +1,2232 @@
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local LocalPlayer = game:GetService("Players").LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
+local HttpService = game:GetService("HttpService")
+local ScriptActive = true
+local DrawingAvailable = pcall(function() return Drawing.new end)
+
+local OrionLib = {
+	Elements = {},
+	ThemeObjects = {},
+	Connections = {},
+	Flags = {},
+	Themes = {
+		Default = {
+			Main = Color3.fromRGB(25, 25, 25),
+			Second = Color3.fromRGB(32, 32, 32),
+			Stroke = Color3.fromRGB(60, 60, 60),
+			Divider = Color3.fromRGB(60, 60, 60),
+			Text = Color3.fromRGB(240, 240, 240),
+			TextDark = Color3.fromRGB(150, 150, 150)
+		}
+	},
+	SelectedTheme = "Default",
+	Folder = nil,
+	SaveCfg = false
+}
+
+local Icons = {}
+local Success, Response = pcall(function()
+	Icons = HttpService:JSONDecode(game:HttpGetAsync("https://raw.githubusercontent.com/evoincorp/lucideblox/master/src/modules/util/icons.json")).icons
+end)
+if not Success then
+	warn("\nOrion Library - Failed to load Feather Icons. Error code: " .. tostring(Response) .. "\n")
+end
+
+local function GetIcon(IconName)
+	if Icons[IconName] ~= nil then
+		return Icons[IconName]
+	else
+		return nil
+	end
+end
+
+local gethui = nil
+pcall(function()
+	gethui = gethui or (getgenv and getgenv().gethui)
+	if not gethui then
+		gethui = getrenv and getrenv().gethui
+	end
+end)
+
+local function safeGetUI()
+	local success, ui = pcall(function()
+		if gethui and type(gethui) == "function" then
+			return gethui()
+		end
+		return nil
+	end)
+	if success and ui then
+		return ui
+	end
+	if syn and syn.protect_gui then
+		return game:GetService("CoreGui")
+	end
+	return game:GetService("CoreGui")
+end
+
+local Orion = Instance.new("ScreenGui")
+Orion.Name = "Orion"
+local parentUI = safeGetUI()
+if syn and syn.protect_gui then
+	pcall(function()
+		syn.protect_gui(Orion)
+	end)
+end
+Orion.Parent = parentUI
+pcall(function()
+	local container = safeGetUI()
+	for _, child in ipairs(container:GetChildren()) do
+		if child.Name == "Orion" and child ~= Orion then
+			child:Destroy()
+		end
+	end
+end)
+
+function OrionLib:IsRunning()
+	local parent = Orion.Parent
+	return parent and parent:IsDescendantOf(game)
+end
+
+local function AddConnection(Signal, Function)
+	if not OrionLib:IsRunning() then
+		return
+	end
+	local SignalConnect = Signal:Connect(Function)
+	table.insert(OrionLib.Connections, SignalConnect)
+	return SignalConnect
+end
+
+task.spawn(function()
+	while OrionLib:IsRunning() do
+		task.wait()
+	end
+	for _, Connection in pairs(OrionLib.Connections) do
+		pcall(function()
+			Connection:Disconnect()
+		end)
+	end
+end)
+
+local function MakeDraggable(DragPoint, Main)
+	pcall(function()
+		local Dragging, DragInput, MousePos, FramePos = false
+		AddConnection(DragPoint.InputBegan, function(Input)
+			if Input.UserInputType == Enum.UserInputType.MouseButton1 then
+				Dragging = true
+				MousePos = Input.Position
+				FramePos = Main.Position
+				Input.Changed:Connect(function()
+					if Input.UserInputState == Enum.UserInputState.End then
+						Dragging = false
+					end
+				end)
+			end
+		end)
+		AddConnection(DragPoint.InputChanged, function(Input)
+			if Input.UserInputType == Enum.UserInputType.MouseMovement then
+				DragInput = Input
+			end
+		end)
+		AddConnection(UserInputService.InputChanged, function(Input)
+			if Input == DragInput and Dragging then
+				local Delta = Input.Position - MousePos
+				Main.Position = UDim2.new(FramePos.X.Scale, FramePos.X.Offset + Delta.X, FramePos.Y.Scale, FramePos.Y.Offset + Delta.Y)
+			end
+		end)
+	end)
+end
+
+local function Create(Name, Properties, Children)
+	local Object = Instance.new(Name)
+	for i, v in next, Properties or {} do
+		Object[i] = v
+	end
+	for i, v in next, Children or {} do
+		v.Parent = Object
+	end
+	return Object
+end
+
+local function CreateElement(ElementName, ElementFunction)
+	OrionLib.Elements[ElementName] = function(...)
+		return ElementFunction(...)
+	end
+end
+
+local function MakeElement(ElementName, ...)
+	return OrionLib.Elements[ElementName](...)
+end
+
+local function SetProps(Element, Props)
+	for Property, Value in pairs(Props) do
+		Element[Property] = Value
+	end
+	return Element
+end
+
+local function SetChildren(Element, Children)
+	for _, Child in pairs(Children) do
+		Child.Parent = Element
+	end
+	return Element
+end
+
+local function Round(Number, Factor)
+	local Result = math.floor(Number / Factor + (math.sign(Number) * 0.5)) * Factor
+	if Result < 0 then
+		Result = Result + Factor
+	end
+	return Result
+end
+
+local function ReturnProperty(Object)
+	if Object:IsA("Frame") or Object:IsA("TextButton") then
+		return "BackgroundColor3"
+	end
+	if Object:IsA("ScrollingFrame") then
+		return "ScrollBarImageColor3"
+	end
+	if Object:IsA("UIStroke") then
+		return "Color"
+	end
+	if Object:IsA("TextLabel") or Object:IsA("TextBox") then
+		return "TextColor3"
+	end
+	if Object:IsA("ImageLabel") or Object:IsA("ImageButton") then
+		return "ImageColor3"
+	end
+end
+
+local function AddThemeObject(Object, Type)
+	if not OrionLib.ThemeObjects[Type] then
+		OrionLib.ThemeObjects[Type] = {}
+	end
+	table.insert(OrionLib.ThemeObjects[Type], Object)
+	Object[ReturnProperty(Object)] = OrionLib.Themes[OrionLib.SelectedTheme][Type]
+	return Object
+end
+
+CreateElement("Corner", function(Scale, Offset)
+	return Create("UICorner", {CornerRadius = UDim.new(Scale or 0, Offset or 10)})
+end)
+
+CreateElement("Stroke", function(Color, Thickness)
+	return Create("UIStroke", {Color = Color or Color3.fromRGB(255, 255, 255), Thickness = Thickness or 1})
+end)
+
+CreateElement("List", function(Scale, Offset)
+	return Create("UIListLayout", {SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(Scale or 0, Offset or 0)})
+end)
+
+CreateElement("Padding", function(Bottom, Left, Right, Top)
+	return Create("UIPadding", {PaddingBottom = UDim.new(0, Bottom or 4), PaddingLeft = UDim.new(0, Left or 4), PaddingRight = UDim.new(0, Right or 4), PaddingTop = UDim.new(0, Top or 4)})
+end)
+
+CreateElement("TFrame", function()
+	return Create("Frame", {BackgroundTransparency = 1})
+end)
+
+CreateElement("Frame", function(Color)
+	return Create("Frame", {BackgroundColor3 = Color or Color3.fromRGB(255,255,255), BorderSizePixel = 0})
+end)
+
+CreateElement("RoundFrame", function(Color, Scale, Offset)
+	return Create("Frame", {BackgroundColor3 = Color or Color3.fromRGB(255,255,255), BorderSizePixel = 0}, {Create("UICorner", {CornerRadius = UDim.new(Scale, Offset)})})
+end)
+
+CreateElement("Button", function()
+	return Create("TextButton", {Text = "", AutoButtonColor = false, BackgroundTransparency = 1, BorderSizePixel = 0})
+end)
+
+CreateElement("ScrollFrame", function(Color, Width)
+	return Create("ScrollingFrame", {BackgroundTransparency = 1, MidImage = "rbxassetid://7445543667", BottomImage = "rbxassetid://7445543667", TopImage = "rbxassetid://7445543667", ScrollBarImageColor3 = Color, BorderSizePixel = 0, ScrollBarThickness = Width, CanvasSize = UDim2.new(0,0,0,0)})
+end)
+
+CreateElement("Image", function(ImageID)
+	local img = Create("ImageLabel", {Image = ImageID, BackgroundTransparency = 1})
+	if GetIcon(ImageID) ~= nil then
+		img.Image = GetIcon(ImageID)
+	end
+	return img
+end)
+
+CreateElement("ImageButton", function(ImageID)
+	return Create("ImageButton", {Image = ImageID, BackgroundTransparency = 1})
+end)
+
+CreateElement("Label", function(Text, TextSize, Transparency)
+	return Create("TextLabel", {Text = Text or "", TextColor3 = Color3.fromRGB(240,240,240), TextTransparency = Transparency or 0, TextSize = TextSize or 15, Font = Enum.Font.Gotham, RichText = true, BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Left})
+end)
+
+local NotificationHolder = SetProps(SetChildren(MakeElement("TFrame"), {SetProps(MakeElement("List"), {HorizontalAlignment = Enum.HorizontalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder, VerticalAlignment = Enum.VerticalAlignment.Bottom, Padding = UDim.new(0,5)})}), {Position = UDim2.new(1,-25,1,-25), Size = UDim2.new(0,300,1,-25), AnchorPoint = Vector2.new(1,1), Parent = Orion})
+
+function OrionLib:MakeNotification(NotificationConfig)
+	spawn(function()
+		NotificationConfig.Name = NotificationConfig.Name or "Notification"
+		NotificationConfig.Content = NotificationConfig.Content or "Test"
+		NotificationConfig.Image = NotificationConfig.Image or "rbxassetid://4384403532"
+		NotificationConfig.Time = NotificationConfig.Time or 15
+		local NotificationParent = SetProps(MakeElement("TFrame"), {Size = UDim2.new(1,0,0,0), AutomaticSize = Enum.AutomaticSize.Y, Parent = NotificationHolder})
+		local NotificationFrame = SetChildren(SetProps(MakeElement("RoundFrame", Color3.fromRGB(25,25,25), 0,10), {Parent = NotificationParent, Size = UDim2.new(1,0,0,0), Position = UDim2.new(1,-55,0,0), BackgroundTransparency = 0, AutomaticSize = Enum.AutomaticSize.Y}), {
+			MakeElement("Stroke", Color3.fromRGB(93,93,93), 1.2),
+			MakeElement("Padding", 12,12,12,12),
+			SetProps(MakeElement("Image", NotificationConfig.Image), {Size = UDim2.new(0,20,0,20), ImageColor3 = Color3.fromRGB(240,240,240), Name = "Icon"}),
+			SetProps(MakeElement("Label", NotificationConfig.Name, 15), {Size = UDim2.new(1,-30,0,20), Position = UDim2.new(0,30,0,0), Font = Enum.Font.GothamBold, Name = "Title"}),
+			SetProps(MakeElement("Label", NotificationConfig.Content, 14), {Size = UDim2.new(1,0,0,0), Position = UDim2.new(0,0,0,25), Font = Enum.Font.GothamSemibold, Name = "Content", AutomaticSize = Enum.AutomaticSize.Y, TextColor3 = Color3.fromRGB(200,200,200), TextWrapped = true})
+		})
+		TweenService:Create(NotificationFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quint), {Position = UDim2.new(0,0,0,0)}):Play()
+		task.wait(NotificationConfig.Time - 0.88)
+		TweenService:Create(NotificationFrame.Icon, TweenInfo.new(0.4, Enum.EasingStyle.Quint), {ImageTransparency = 1}):Play()
+		TweenService:Create(NotificationFrame, TweenInfo.new(0.8, Enum.EasingStyle.Quint), {BackgroundTransparency = 0.6}):Play()
+		task.wait(0.3)
+		TweenService:Create(NotificationFrame.UIStroke, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {Transparency = 0.9}):Play()
+		TweenService:Create(NotificationFrame.Title, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {TextTransparency = 0.4}):Play()
+		TweenService:Create(NotificationFrame.Content, TweenInfo.new(0.6, Enum.EasingStyle.Quint), {TextTransparency = 0.5}):Play()
+		task.wait(0.05)
+		NotificationFrame:TweenPosition(UDim2.new(1,20,0,0), "In", "Quint", 0.8, true)
+		task.wait(1.35)
+		NotificationFrame:Destroy()
+	end)
+end
+
+function OrionLib:MakeWindow(WindowConfig)
+	local FirstTab, Minimized = true, false
+	WindowConfig = WindowConfig or {}
+	WindowConfig.Name = WindowConfig.Name or "Orion Library"
+	WindowConfig.ConfigFolder = WindowConfig.ConfigFolder or WindowConfig.Name
+	WindowConfig.SaveConfig = WindowConfig.SaveConfig or false
+	WindowConfig.HidePremium = WindowConfig.HidePremium or false
+	if WindowConfig.IntroEnabled == nil then
+		WindowConfig.IntroEnabled = true
+	end
+	WindowConfig.IntroText = WindowConfig.IntroText or "Orion Library"
+	WindowConfig.CloseCallback = WindowConfig.CloseCallback or function() end
+	WindowConfig.ShowIcon = WindowConfig.ShowIcon or false
+	WindowConfig.Icon = WindowConfig.Icon or "rbxassetid://8834748103"
+	WindowConfig.IntroIcon = WindowConfig.IntroIcon or "rbxassetid://8834748103"
+	OrionLib.Folder = WindowConfig.ConfigFolder
+	OrionLib.SaveCfg = WindowConfig.SaveConfig
+	if WindowConfig.SaveConfig then
+		pcall(function()
+			if not isfolder(WindowConfig.ConfigFolder) then
+				makefolder(WindowConfig.ConfigFolder)
+			end
+		end)
+	end
+	local TabHolder = AddThemeObject(SetChildren(SetProps(MakeElement("ScrollFrame", Color3.fromRGB(255,255,255), 4), {Size = UDim2.new(1,0,1,-50)}), {MakeElement("List"), MakeElement("Padding", 8,0,0,8)}), "Divider")
+	AddConnection(TabHolder.UIListLayout:GetPropertyChangedSignal("AbsoluteContentSize"), function()
+		TabHolder.CanvasSize = UDim2.new(0,0,0, TabHolder.UIListLayout.AbsoluteContentSize.Y + 16)
+	end)
+	local MinimizeBtn = SetChildren(SetProps(MakeElement("Button"), {Size = UDim2.new(1,0,1,0), BackgroundTransparency = 1}), {
+		SetProps(MakeElement("Label", "-", 18), {
+			AnchorPoint = Vector2.new(0.5,0.5),
+			Position = UDim2.new(0.5,0,0.5,0),
+			Size = UDim2.new(0,18,0,18),
+			Name = "Ico",
+			TextColor3 = Color3.fromRGB(240,240,240),
+			TextXAlignment = Enum.TextXAlignment.Center,
+			TextYAlignment = Enum.TextYAlignment.Center
+		})
+	})
+	local DragPoint = SetProps(MakeElement("TFrame"), {Size = UDim2.new(1,0,0,50)})
+	local PlayerNameLabel = SetProps(MakeElement("Label", LocalPlayer.DisplayName, WindowConfig.HidePremium and 14 or 13), {
+		Size = UDim2.new(1,-60,0,13),
+		Position = WindowConfig.HidePremium and UDim2.new(0,50,0,19) or UDim2.new(0,50,0,12),
+		Font = Enum.Font.GothamBold,
+		ClipsDescendants = true
+	})
+	local AvatarStroke = MakeElement("Stroke")
+	local AvatarFrame = SetChildren(SetProps(MakeElement("Frame"), {
+		AnchorPoint = Vector2.new(0,0.5),
+		Size = UDim2.new(0,32,0,32),
+		Position = UDim2.new(0,10,0.5,0),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0
+	}), {
+		SetProps(MakeElement("Image", "https://www.roblox.com/headshot-thumbnail/image?userId="..LocalPlayer.UserId.."&width=420&height=420&format=png"), {
+			Size = UDim2.new(1,0,1,0),
+			BackgroundTransparency = 1
+		}),
+		AvatarStroke
+	})
+	local WindowStuff = AddThemeObject(SetChildren(SetProps(MakeElement("RoundFrame", Color3.fromRGB(255,255,255), 0,10), {Size = UDim2.new(0,150,1,-50), Position = UDim2.new(0,0,0,50)}), {
+		AddThemeObject(SetProps(MakeElement("Frame"), {Size = UDim2.new(1,0,0,10), Position = UDim2.new(0,0,0,0)}), "Second"),
+		AddThemeObject(SetProps(MakeElement("Frame"), {Size = UDim2.new(0,10,1,0), Position = UDim2.new(1,-10,0,0)}), "Second"),
+		AddThemeObject(SetProps(MakeElement("Frame"), {Size = UDim2.new(0,1,1,0), Position = UDim2.new(1,-1,0,0)}), "Stroke"),
+		TabHolder,
+		SetChildren(SetProps(MakeElement("TFrame"), {Size = UDim2.new(1,0,0,50), Position = UDim2.new(0,0,1,-50)}), {
+			AddThemeObject(SetProps(MakeElement("Frame"), {Size = UDim2.new(1,0,0,1)}), "Stroke"),
+			AvatarFrame,
+			SetChildren(SetProps(MakeElement("TFrame"), {AnchorPoint = Vector2.new(0,0.5), Size = UDim2.new(0,32,0,32), Position = UDim2.new(0,10,0.5,0)}), {
+				AddThemeObject(MakeElement("Stroke"), "Stroke"),
+				MakeElement("Corner", 1)
+			}),
+			PlayerNameLabel
+		})
+	}), "Second")
+	local WindowName = SetProps(MakeElement("Label", WindowConfig.Name, 14), {Size = UDim2.new(1,-30,2,0), Position = UDim2.new(0,25,0,-24), Font = Enum.Font.GothamBlack, TextSize = 20})
+	local WindowTopBarLine = AddThemeObject(SetProps(MakeElement("Frame"), {Size = UDim2.new(1,0,0,1), Position = UDim2.new(0,0,1,-1)}), "Stroke")
+	local SuspensionStroke = MakeElement("Stroke")
+	local SuspensionFrame = AddThemeObject(SetChildren(SetProps(MakeElement("RoundFrame", Color3.fromRGB(255,255,255), 0,7), {Size = UDim2.new(0,70,0,30), Position = UDim2.new(1,-90,0,10)}), {
+		SuspensionStroke,
+		MinimizeBtn
+	}), "Second")
+	local MainWindow = AddThemeObject(SetChildren(SetProps(MakeElement("RoundFrame", Color3.fromRGB(255,255,255), 0,10), {Parent = Orion, Position = UDim2.new(0.5,-275,0.5,-155), Size = UDim2.new(0,550,0,310), ClipsDescendants = true, Active = true, Draggable = true}), {
+		SetChildren(SetProps(MakeElement("TFrame"), {Size = UDim2.new(1,0,0,50), Name = "TopBar"}), {
+			WindowName,
+			WindowTopBarLine,
+			SuspensionFrame
+		}),
+		DragPoint,
+		WindowStuff
+	}), "Main")
+	local MainWindowStroke = MakeElement("Stroke", Color3.fromRGB(255,255,255), 1.5)
+	MainWindowStroke.Parent = MainWindow
+	if WindowConfig.ShowIcon then
+		WindowName.Position = UDim2.new(0,50,0,-24)
+		local WindowIcon = SetProps(MakeElement("Image", WindowConfig.Icon), {Size = UDim2.new(0,20,0,20), Position = UDim2.new(0,25,0,15)})
+		WindowIcon.Parent = MainWindow.TopBar
+	end
+	MakeDraggable(DragPoint, MainWindow)
+	AddConnection(MinimizeBtn.MouseButton1Up, function()
+		if Minimized then
+			TweenService:Create(MainWindow, TweenInfo.new(0.5, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {Size = UDim2.new(0,550,0,310)}):Play()
+			MinimizeBtn.Ico.Text = "-"
+			task.wait(0.02)
+			MainWindow.ClipsDescendants = false
+			WindowStuff.Visible = true
+			WindowTopBarLine.Visible = true
+		else
+			MainWindow.ClipsDescendants = true
+			WindowTopBarLine.Visible = false
+			MinimizeBtn.Ico.Text = "+"
+			TweenService:Create(MainWindow, TweenInfo.new(0.5, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {Size = UDim2.new(0, WindowName.TextBounds.X + 140, 0, 50)}):Play()
+			task.wait(0.1)
+			WindowStuff.Visible = false
+		end
+		Minimized = not Minimized
+	end)
+	task.spawn(function()
+		while ScriptActive and Orion.Parent do
+			local hue = tick() * 0.5 % 1
+			local col = Color3.fromHSV(hue, 1, 1)
+			MainWindowStroke.Color = col
+			SuspensionStroke.Color = col
+			AvatarStroke.Color = col
+			PlayerNameLabel.TextColor3 = col
+			task.wait()
+		end
+	end)
+	local function LoadSequence()
+		MainWindow.Visible = false
+		local LoadSequenceLogo = SetProps(MakeElement("Image", WindowConfig.IntroIcon), {
+			Parent = Orion,
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0.5, 0, 0.43, 0),
+			Size = UDim2.new(0, 28, 0, 28),
+			ImageColor3 = Color3.fromRGB(255, 255, 255),
+			ImageTransparency = 1
+		})
+		local LoadSequenceText = SetProps(MakeElement("Label", WindowConfig.IntroText, 14), {
+			Parent = Orion,
+			Size = UDim2.new(1, 0, 1, 0),
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0.5, 19, 0.43, 0),
+			TextXAlignment = Enum.TextXAlignment.Center,
+			Font = Enum.Font.GothamBold,
+			TextTransparency = 1
+		})
+		task.wait()
+		local textWidth = LoadSequenceText.TextBounds.X
+		if textWidth < 1 then
+			textWidth = 100
+		end
+		TweenService:Create(LoadSequenceLogo, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			ImageTransparency = 0,
+			Position = UDim2.new(0.5, 0, 0.43, 0)
+		}):Play()
+		task.wait(0.8)
+		TweenService:Create(LoadSequenceLogo, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Position = UDim2.new(0.5, -(textWidth / 2), 0.43, 0)
+		}):Play()
+		task.wait(0.3)
+		TweenService:Create(LoadSequenceText, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			TextTransparency = 0
+		}):Play()
+		task.wait(2)
+		TweenService:Create(LoadSequenceText, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			TextTransparency = 1
+		}):Play()
+		MainWindow.Visible = true
+		LoadSequenceLogo:Destroy()
+		LoadSequenceText:Destroy()
+		local vu = game:GetService("VirtualUser")
+		game:GetService("Players").LocalPlayer.Idled:Connect(function()
+			vu:Button2Down(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+			wait(0.1)
+			vu:Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+		end)
+		OrionLib:MakeNotification({Name = "绕过反作弊", Content = "已开启", Time = 2})
+		local TARGET = "UltimateAntiCheat"
+		pcall(function()
+			local originalPrint = print
+			print = function() end
+			warn = function() end
+			for _, obj in ipairs(game:GetDescendants()) do
+				if obj:IsA("BaseScript") and obj.Name == TARGET then
+					pcall(obj.Destroy, obj)
+				end
+			end
+			for k, v in pairs(package.loaded) do
+				if type(k) == "string" and string.find(k, TARGET) then
+					package.loaded[k] = nil
+				end
+			end
+			for k, v in pairs(_G) do
+				if type(k) == "string" and string.find(k, TARGET) then
+					_G[k] = nil
+				end
+			end
+			if getgc then
+				local gc = getgc()
+				for _, obj in ipairs(gc) do
+					if type(obj) == "function" then
+						local info = debug.getinfo(obj)
+						if info and info.source and string.find(info.source, TARGET) then
+							pcall(function()
+								local env = getfenv(obj)
+								if env then
+									setfenv(obj, setmetatable({}, {
+										__index = function() error("blocked") end
+									}))
+								end
+							end)
+							local i = 1
+							while true do
+								local name, value = debug.getupvalue(obj, i)
+								if not name then break end
+								if type(value) == "function" or type(value) == "table" then
+									debug.setupvalue(obj, i, nil)
+								end
+								i = i + 1
+							end
+						end
+					end
+				end
+			end
+			local oldRequire = require
+			require = function(module)
+				if type(module) == "Instance" and module.Name == TARGET then
+					return nil
+				end
+				if type(module) == "string" and string.find(module, TARGET) then
+					return nil
+				end
+				return oldRequire(module)
+			end
+			local oldLoadstring = loadstring
+			loadstring = function(str, chunkname)
+				if chunkname and string.find(chunkname, TARGET) then
+					return nil, "blocked"
+				end
+				if type(str) == "string" and string.find(str, TARGET) then
+					return nil, "blocked"
+				end
+				return oldLoadstring(str, chunkname)
+			end
+			local RunService = game:GetService("RunService")
+			local events = {RunService.Heartbeat, RunService.Stepped, RunService.RenderStepped}
+			for _, event in ipairs(events) do
+				if event and event.GetConnections then
+					for _, conn in ipairs(event:GetConnections()) do
+						local func = conn.Function
+						local info = debug.getinfo(func)
+						if info and info.source and string.find(info.source, TARGET) then
+							pcall(conn.Disconnect, conn)
+						end
+					end
+				end
+			end
+			local function watchContainer(container)
+				container.ChildAdded:Connect(function(child)
+					if child.Name == TARGET and child:IsA("BaseScript") then
+						pcall(child.Destroy, child)
+					end
+				end)
+			end
+			for _, container in ipairs(game:GetDescendants()) do
+				if container:IsA("Folder") or container:IsA("Model") or container:IsA("DataModel") then
+					watchContainer(container)
+				end
+			end
+			game.ChildAdded:Connect(function(child)
+				if child.Name == TARGET and child:IsA("BaseScript") then
+					pcall(child.Destroy, child)
+				end
+				if child:IsA("Folder") or child:IsA("Model") then
+					watchContainer(child)
+				end
+			end)
+			local Players = game:GetService("Players")
+			local ReplicatedStorage = game:GetService("ReplicatedStorage")
+			local HttpService = game:GetService("HttpService")
+			local player = Players.LocalPlayer
+			local character = player.Character or player.CharacterAdded:Wait()
+			local rootPart = character:WaitForChild("HumanoidRootPart")
+			local CONFIG = {
+				MaxPacketsPerSecond = 10,
+				MinDelayMS = 50,
+				MaxDelayMS = 150,
+				HeartbeatTimeout = 2.0,
+			}
+			local packetQueue = {}
+			local isProcessing = false
+			local function sendPacket(remoteEvent, ...)
+				local args = {...}
+				table.insert(packetQueue, {
+					remote = remoteEvent,
+					args = args,
+					time = tick()
+				})
+				if not isProcessing then
+					isProcessing = true
+					task.spawn(processQueue)
+				end
+			end
+			local function processQueue()
+				while #packetQueue > 0 do
+					local pkt = table.remove(packetQueue, 1)
+					local delay = math.random(CONFIG.MinDelayMS, CONFIG.MaxDelayMS) / 1000
+					task.wait(delay)
+					local success, err = pcall(function()
+						pkt.remote:FireServer(unpack(pkt.args))
+					end)
+					if not success then
+						table.insert(packetQueue, pkt)
+						task.wait(0.5)
+					end
+					if #packetQueue > 10 then
+						task.wait(0.1)
+					end
+				end
+				isProcessing = false
+			end
+			local lastSendTime = 0
+			local function onRootMoved()
+				local now = tick()
+				if now - lastSendTime < (1 / CONFIG.MaxPacketsPerSecond) then
+					return
+				end
+				lastSendTime = now
+			end
+			RunService.Heartbeat:Connect(function(deltaTime)
+				onRootMoved()
+			end)
+			local lastHeartbeat = tick()
+			local isPaused = false
+			local currentVelocity = nil
+			RunService.Heartbeat:Connect(function()
+				local now = tick()
+				local elapsed = now - lastHeartbeat
+				if elapsed > CONFIG.HeartbeatTimeout then
+					if not isPaused then
+						isPaused = true
+						if currentVelocity then
+							currentVelocity:Destroy()
+							currentVelocity = nil
+						end
+					end
+				else
+					if isPaused then
+						isPaused = false
+					end
+				end
+				lastHeartbeat = now
+			end)
+			local function hookAllRemotes(parent)
+				for _, child in ipairs(parent:GetChildren()) do
+					if child:IsA("RemoteEvent") or child:IsA("RemoteFunction") then
+						local oldFunc = child.OnClientEvent
+						child.OnClientEvent = function(...)
+							lastHeartbeat = tick()
+							if oldFunc then
+								oldFunc(...)
+							end
+						end
+					end
+					if child:IsA("Folder") or child:IsA("Model") then
+						hookAllRemotes(child)
+					end
+				end
+			end
+			task.spawn(function()
+				hookAllRemotes(ReplicatedStorage)
+				hookAllRemotes(player.PlayerGui)
+				hookAllRemotes(player.PlayerScripts)
+			end)
+			local function hookRemoteEvents(container)
+				for _, obj in ipairs(container:GetDescendants()) do
+					if obj:IsA("RemoteEvent") then
+						local metatable = getrawmetatable(obj)
+						if metatable then
+							local oldIndex = metatable.__index
+							metatable.__index = function(tbl, key)
+								if key == "FireServer" then
+									return function(self, ...)
+										local args = {...}
+										if AIMBOT_ENABLED and ScriptActive and not shouldSkipEvent(self) then
+											args = modifyArgs(args)
+										end
+										sendPacket(self, unpack(args))
+									end
+								end
+								return oldIndex(tbl, key)
+							end
+						end
+					end
+				end
+			end
+			pcall(function()
+				hookRemoteEvents(ReplicatedStorage)
+				hookRemoteEvents(player.PlayerGui)
+			end)
+			_G.SafeFire = function(remote, ...)
+				local args = {...}
+				if AIMBOT_ENABLED and ScriptActive and not shouldSkipEvent(remote) then
+					args = modifyArgs(args)
+				end
+				sendPacket(remote, unpack(args))
+			end
+		end)
+	end
+	if WindowConfig.IntroEnabled then
+		LoadSequence()
+	end
+	local TabFunction = {}
+	function TabFunction:MakeTab(TabConfig)
+		TabConfig = TabConfig or {}
+		TabConfig.Name = TabConfig.Name or "Tab"
+		TabConfig.Icon = TabConfig.Icon or ""
+		TabConfig.PremiumOnly = TabConfig.PremiumOnly or false
+		local TabFrame = SetChildren(SetProps(MakeElement("Button"), {Size = UDim2.new(1,0,0,30), Parent = TabHolder}), {
+			AddThemeObject(SetProps(MakeElement("Image", TabConfig.Icon), {AnchorPoint = Vector2.new(0,0.5), Size = UDim2.new(0,18,0,18), Position = UDim2.new(0,10,0.5,0), ImageTransparency = 0.4, Name = "Ico"}), "Text"),
+			AddThemeObject(SetProps(MakeElement("Label", TabConfig.Name, 14), {Size = UDim2.new(1,-35,1,0), Position = UDim2.new(0,35,0,0), Font = Enum.Font.GothamSemibold, TextTransparency = 0.4, Name = "Title"}), "Text")
+		})
+		if GetIcon(TabConfig.Icon) ~= nil then
+			TabFrame.Ico.Image = GetIcon(TabConfig.Icon)
+		end
+		local Container = AddThemeObject(SetChildren(SetProps(MakeElement("ScrollFrame", Color3.fromRGB(255,255,255), 5), {Size = UDim2.new(1,-150,1,-50), Position = UDim2.new(0,150,0,50), Parent = MainWindow, Visible = false, Name = "ItemContainer"}), {MakeElement("List", 0,6), MakeElement("Padding", 15,10,10,15)}), "Divider")
+		AddConnection(Container.UIListLayout:GetPropertyChangedSignal("AbsoluteContentSize"), function()
+			Container.CanvasSize = UDim2.new(0,0,0, Container.UIListLayout.AbsoluteContentSize.Y + 30)
+		end)
+		if FirstTab then
+			FirstTab = false
+			TabFrame.Ico.ImageTransparency = 0
+			TabFrame.Title.TextTransparency = 0
+			TabFrame.Title.Font = Enum.Font.GothamBlack
+			Container.Visible = true
+		end
+		AddConnection(TabFrame.MouseButton1Click, function()
+			for _, Tab in pairs(TabHolder:GetChildren()) do
+				if Tab:IsA("TextButton") then
+					Tab.Title.Font = Enum.Font.GothamSemibold
+					TweenService:Create(Tab.Ico, TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {ImageTransparency = 0.4}):Play()
+					TweenService:Create(Tab.Title, TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {TextTransparency = 0.4}):Play()
+				end
+			end
+			for _, ItemContainer in pairs(MainWindow:GetChildren()) do
+				if ItemContainer.Name == "ItemContainer" then
+					ItemContainer.Visible = false
+				end
+			end
+			TweenService:Create(TabFrame.Ico, TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {ImageTransparency = 0}):Play()
+			TweenService:Create(TabFrame.Title, TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {TextTransparency = 0}):Play()
+			TabFrame.Title.Font = Enum.Font.GothamBlack
+			Container.Visible = true
+		end)
+		local function GetElements(ItemParent)
+			local ElementFunction = {}
+			function ElementFunction:AddLabel(Text)
+				local LabelFrame = AddThemeObject(SetChildren(SetProps(MakeElement("RoundFrame", Color3.fromRGB(255,255,255), 0,5), {Size = UDim2.new(1,0,0,30), BackgroundTransparency = 0.7, Parent = ItemParent}), {AddThemeObject(SetProps(MakeElement("Label", Text, 15), {Size = UDim2.new(1,-12,1,0), Position = UDim2.new(0,12,0,0), Font = Enum.Font.GothamBold, Name = "Content"}), "Text"), AddThemeObject(MakeElement("Stroke"), "Stroke")}), "Second")
+				local LabelFunction = {}
+				function LabelFunction:Set(ToChange)
+					LabelFrame.Content.Text = ToChange
+				end
+				return LabelFunction
+			end
+			function ElementFunction:AddParagraph(Text, Content)
+				Text = Text or "Text"; Content = Content or "Content"
+				local ParagraphFrame = AddThemeObject(SetChildren(SetProps(MakeElement("RoundFrame", Color3.fromRGB(255,255,255), 0,5), {Size = UDim2.new(1,0,0,30), BackgroundTransparency = 0.7, Parent = ItemParent}), {AddThemeObject(SetProps(MakeElement("Label", Text, 15), {Size = UDim2.new(1,-12,0,14), Position = UDim2.new(0,12,0,10), Font = Enum.Font.GothamBold, Name = "Title"}), "Text"), AddThemeObject(SetProps(MakeElement("Label", "", 13), {Size = UDim2.new(1,-24,0,0), Position = UDim2.new(0,12,0,26), Font = Enum.Font.GothamSemibold, Name = "Content", TextWrapped = true}), "TextDark"), AddThemeObject(MakeElement("Stroke"), "Stroke")}), "Second")
+				AddConnection(ParagraphFrame.Content:GetPropertyChangedSignal("Text"), function()
+					ParagraphFrame.Content.Size = UDim2.new(1,-24,0, ParagraphFrame.Content.TextBounds.Y); ParagraphFrame.Size = UDim2.new(1,0,0, ParagraphFrame.Content.TextBounds.Y + 35)
+				end)
+				ParagraphFrame.Content.Text = Content
+				local ParagraphFunction = {}
+				function ParagraphFunction:Set(ToChange)
+					ParagraphFrame.Content.Text = ToChange
+				end
+				return ParagraphFunction
+			end
+			function ElementFunction:AddButton(ButtonConfig)
+				ButtonConfig = ButtonConfig or {}
+				ButtonConfig.Name = ButtonConfig.Name or "Button"
+				ButtonConfig.Callback = ButtonConfig.Callback or function() end
+				ButtonConfig.Icon = ButtonConfig.Icon or "rbxassetid://3944703587"
+				local Button = {}
+				local Click = SetProps(MakeElement("Button"), {Size = UDim2.new(1,0,1,0)})
+				local ButtonFrame = AddThemeObject(SetChildren(SetProps(MakeElement("RoundFrame", Color3.fromRGB(255,255,255), 0,5), {Size = UDim2.new(1,0,0,33), Parent = ItemParent}), {AddThemeObject(SetProps(MakeElement("Label", ButtonConfig.Name, 15), {Size = UDim2.new(1,-12,1,0), Position = UDim2.new(0,12,0,0), Font = Enum.Font.GothamBold, Name = "Content"}), "Text"), AddThemeObject(SetProps(MakeElement("Image", ButtonConfig.Icon), {Size = UDim2.new(0,20,0,20), Position = UDim2.new(1,-30,0,7)}), "TextDark"), AddThemeObject(MakeElement("Stroke"), "Stroke"), Click}), "Second")
+				AddConnection(Click.MouseEnter, function()
+					TweenService:Create(ButtonFrame, TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {BackgroundColor3 = Color3.fromRGB(OrionLib.Themes[OrionLib.SelectedTheme].Second.R*255+3, OrionLib.Themes[OrionLib.SelectedTheme].Second.G*255+3, OrionLib.Themes[OrionLib.SelectedTheme].Second.B*255+3)}):Play()
+				end)
+				AddConnection(Click.MouseLeave, function()
+					TweenService:Create(ButtonFrame, TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {BackgroundColor3 = OrionLib.Themes[OrionLib.SelectedTheme].Second}):Play()
+				end)
+				AddConnection(Click.MouseButton1Up, function()
+					TweenService:Create(ButtonFrame, TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {BackgroundColor3 = Color3.fromRGB(OrionLib.Themes[OrionLib.SelectedTheme].Second.R*255+3, OrionLib.Themes[OrionLib.SelectedTheme].Second.G*255+3, OrionLib.Themes[OrionLib.SelectedTheme].Second.B*255+3)}):Play(); spawn(function() ButtonConfig.Callback() end)
+				end)
+				AddConnection(Click.MouseButton1Down, function()
+					TweenService:Create(ButtonFrame, TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {BackgroundColor3 = Color3.fromRGB(OrionLib.Themes[OrionLib.SelectedTheme].Second.R*255+6, OrionLib.Themes[OrionLib.SelectedTheme].Second.G*255+6, OrionLib.Themes[OrionLib.SelectedTheme].Second.B*255+6)}):Play()
+				end)
+				function Button:Set(Text)
+					ButtonFrame.Content.Text = Text
+				end
+				return Button
+			end
+			function ElementFunction:AddToggle(ToggleConfig)
+				ToggleConfig = ToggleConfig or {}
+				ToggleConfig.Name = ToggleConfig.Name or "Toggle"
+				ToggleConfig.Default = ToggleConfig.Default or false
+				ToggleConfig.Callback = ToggleConfig.Callback or function() end
+				ToggleConfig.Color = ToggleConfig.Color or Color3.fromRGB(9,99,195)
+				ToggleConfig.Flag = ToggleConfig.Flag or nil
+				ToggleConfig.Save = ToggleConfig.Save or false
+				local Toggle = {Value = ToggleConfig.Default, Save = ToggleConfig.Save}
+				local Click = SetProps(MakeElement("Button"), {Size = UDim2.new(1,0,1,0)})
+				local ToggleBox = SetChildren(SetProps(MakeElement("RoundFrame", ToggleConfig.Color, 0,4), {Size = UDim2.new(0,24,0,24), Position = UDim2.new(1,-24,0.5,0), AnchorPoint = Vector2.new(0.5,0.5)}), {SetProps(MakeElement("Stroke"), {Color = ToggleConfig.Color, Name = "Stroke", Transparency = 0.5}), SetProps(MakeElement("Image", "rbxassetid://3944680095"), {Size = UDim2.new(0,20,0,20), AnchorPoint = Vector2.new(0.5,0.5), Position = UDim2.new(0.5,0,0.5,0), ImageColor3 = Color3.fromRGB(255,255,255), Name = "Ico"})})
+				local ToggleFrame = AddThemeObject(SetChildren(SetProps(MakeElement("RoundFrame", Color3.fromRGB(255,255,255), 0,5), {Size = UDim2.new(1,0,0,38), Parent = ItemParent}), {AddThemeObject(SetProps(MakeElement("Label", ToggleConfig.Name, 15), {Size = UDim2.new(1,-12,1,0), Position = UDim2.new(0,12,0,0), Font = Enum.Font.GothamBold, Name = "Content"}), "Text"), AddThemeObject(MakeElement("Stroke"), "Stroke"), ToggleBox, Click}), "Second")
+				function Toggle:Set(Value, noCallback)
+					Toggle.Value = Value
+					TweenService:Create(ToggleBox, TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {BackgroundColor3 = Toggle.Value and ToggleConfig.Color or OrionLib.Themes.Default.Divider}):Play()
+					TweenService:Create(ToggleBox.Stroke, TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {Color = Toggle.Value and ToggleConfig.Color or OrionLib.Themes.Default.Stroke}):Play()
+					TweenService:Create(ToggleBox.Ico, TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {ImageTransparency = Toggle.Value and 0 or 1, Size = Toggle.Value and UDim2.new(0,20,0,20) or UDim2.new(0,8,0,8)}):Play()
+					if not noCallback then
+						ToggleConfig.Callback(Toggle.Value)
+					end
+				end
+				Toggle:Set(Toggle.Value, true)
+				AddConnection(Click.MouseEnter, function()
+					TweenService:Create(ToggleFrame, TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {BackgroundColor3 = Color3.fromRGB(OrionLib.Themes[OrionLib.SelectedTheme].Second.R*255+3, OrionLib.Themes[OrionLib.SelectedTheme].Second.G*255+3, OrionLib.Themes[OrionLib.SelectedTheme].Second.B*255+3)}):Play()
+				end)
+				AddConnection(Click.MouseLeave, function()
+					TweenService:Create(ToggleFrame, TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {BackgroundColor3 = OrionLib.Themes[OrionLib.SelectedTheme].Second}):Play()
+				end)
+				AddConnection(Click.MouseButton1Up, function()
+					TweenService:Create(ToggleFrame, TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {BackgroundColor3 = Color3.fromRGB(OrionLib.Themes[OrionLib.SelectedTheme].Second.R*255+3, OrionLib.Themes[OrionLib.SelectedTheme].Second.G*255+3, OrionLib.Themes[OrionLib.SelectedTheme].Second.B*255+3)}):Play(); Toggle:Set(not Toggle.Value)
+				end)
+				AddConnection(Click.MouseButton1Down, function()
+					TweenService:Create(ToggleFrame, TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {BackgroundColor3 = Color3.fromRGB(OrionLib.Themes[OrionLib.SelectedTheme].Second.R*255+6, OrionLib.Themes[OrionLib.SelectedTheme].Second.G*255+6, OrionLib.Themes[OrionLib.SelectedTheme].Second.B*255+6)}):Play()
+				end)
+				if ToggleConfig.Flag then
+					OrionLib.Flags[ToggleConfig.Flag] = Toggle
+				end
+				return Toggle
+			end
+			function ElementFunction:AddSlider(SliderConfig)
+				SliderConfig = SliderConfig or {}
+				SliderConfig.Name = SliderConfig.Name or "Slider"
+				SliderConfig.Min = SliderConfig.Min or 0
+				SliderConfig.Max = SliderConfig.Max or 100
+				SliderConfig.Increment = SliderConfig.Increment or 1
+				SliderConfig.Default = SliderConfig.Default or 50
+				SliderConfig.Callback = SliderConfig.Callback or function() end
+				SliderConfig.ValueName = SliderConfig.ValueName or ""
+				SliderConfig.Color = SliderConfig.Color or Color3.fromRGB(9,149,98)
+				SliderConfig.Flag = SliderConfig.Flag or nil
+				SliderConfig.Save = SliderConfig.Save or false
+				local Slider = {Value = SliderConfig.Default, Save = SliderConfig.Save}
+				local Dragging = false
+				local SliderDrag = SetChildren(SetProps(MakeElement("RoundFrame", SliderConfig.Color, 0,5), {Size = UDim2.new(0,0,1,0), BackgroundTransparency = 0.3, ClipsDescendants = true}), {AddThemeObject(SetProps(MakeElement("Label", "value", 13), {Size = UDim2.new(1,-12,0,14), Position = UDim2.new(0,12,0,6), Font = Enum.Font.GothamBold, Name = "Value", TextTransparency = 0}), "Text")})
+				local SliderBar = SetChildren(SetProps(MakeElement("RoundFrame", SliderConfig.Color, 0,5), {Size = UDim2.new(1,-24,0,26), Position = UDim2.new(0,12,0,30), BackgroundTransparency = 0.9}), {SetProps(MakeElement("Stroke"), {Color = SliderConfig.Color}), AddThemeObject(SetProps(MakeElement("Label", "value", 13), {Size = UDim2.new(1,-12,0,14), Position = UDim2.new(0,12,0,6), Font = Enum.Font.GothamBold, Name = "Value", TextTransparency = 0.8}), "Text"), SliderDrag})
+				local SliderFrame = AddThemeObject(SetChildren(SetProps(MakeElement("RoundFrame", Color3.fromRGB(255,255,255), 0,4), {Size = UDim2.new(1,0,0,65), Parent = ItemParent}), {AddThemeObject(SetProps(MakeElement("Label", SliderConfig.Name, 15), {Size = UDim2.new(1,-12,0,14), Position = UDim2.new(0,12,0,10), Font = Enum.Font.GothamBold, Name = "Content"}), "Text"), AddThemeObject(MakeElement("Stroke"), "Stroke"), SliderBar}), "Second")
+				SliderBar.InputBegan:Connect(function(Input)
+					if Input.UserInputType == Enum.UserInputType.MouseButton1 then
+						Dragging = true
+					end
+				end)
+				SliderBar.InputEnded:Connect(function(Input)
+					if Input.UserInputType == Enum.UserInputType.MouseButton1 then
+						Dragging = false
+					end
+				end)
+				UserInputService.InputChanged:Connect(function(Input)
+					if Dragging and Input.UserInputType == Enum.UserInputType.MouseMovement then
+						local SizeScale = math.clamp((Input.Position.X - SliderBar.AbsolutePosition.X) / SliderBar.AbsoluteSize.X, 0, 1)
+						Slider:Set(SliderConfig.Min + ((SliderConfig.Max - SliderConfig.Min) * SizeScale))
+					end
+				end)
+				function Slider:Set(Value)
+					self.Value = math.clamp(Round(Value, SliderConfig.Increment), SliderConfig.Min, SliderConfig.Max)
+					TweenService:Create(SliderDrag, TweenInfo.new(.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.fromScale((self.Value - SliderConfig.Min) / (SliderConfig.Max - SliderConfig.Min), 1)}):Play()
+					SliderBar.Value.Text = tostring(self.Value) .. " " .. SliderConfig.ValueName
+					SliderDrag.Value.Text = tostring(self.Value) .. " " .. SliderConfig.ValueName
+					SliderConfig.Callback(self.Value)
+				end
+				Slider:Set(Slider.Value)
+				if SliderConfig.Flag then
+					OrionLib.Flags[SliderConfig.Flag] = Slider
+				end
+				return Slider
+			end
+			return ElementFunction
+		end
+		local ElementFunction = {}
+		function ElementFunction:AddSection(SectionConfig)
+			SectionConfig.Name = SectionConfig.Name or "Section"
+			local SectionFrame = SetChildren(SetProps(MakeElement("TFrame"), {Size = UDim2.new(1,0,0,26), Parent = Container}), {AddThemeObject(SetProps(MakeElement("Label", SectionConfig.Name, 14), {Size = UDim2.new(1,-12,0,16), Position = UDim2.new(0,0,0,3), Font = Enum.Font.GothamSemibold}), "TextDark"), SetChildren(SetProps(MakeElement("TFrame"), {AnchorPoint = Vector2.new(0,0), Size = UDim2.new(1,0,1,-24), Position = UDim2.new(0,0,0,23), Name = "Holder"}), {MakeElement("List", 0,6)})})
+			AddConnection(SectionFrame.Holder.UIListLayout:GetPropertyChangedSignal("AbsoluteContentSize"), function()
+				SectionFrame.Size = UDim2.new(1,0,0, SectionFrame.Holder.UIListLayout.AbsoluteContentSize.Y + 31); SectionFrame.Holder.Size = UDim2.new(1,0,0, SectionFrame.Holder.UIListLayout.AbsoluteContentSize.Y)
+			end)
+			local SectionFunction = {}
+			for i, v in pairs(GetElements(SectionFrame.Holder)) do
+				SectionFunction[i] = v
+			end
+			return SectionFunction
+		end
+		for i, v in pairs(GetElements(Container)) do
+			ElementFunction[i] = v
+		end
+		return ElementFunction
+	end
+	return TabFunction
+end
+
+function OrionLib:Destroy()
+	Orion:Destroy()
+end
+
+local Workspace = game:GetService("Workspace")
+local Players = game:GetService("Players")
+local Lighting = game:GetService("Lighting")
+local Camera = Workspace.CurrentCamera
+
+local AIMBOT_ENABLED = false
+local FOV_ANGLE = 15
+local CIRCLE_RADIUS = 150
+local SHOW_CIRCLE = false
+local SEGMENTS = 360
+local ESP_ENABLED = false
+local ESP_SETTINGS = {
+	Skeleton = false,
+	Name = false,
+	Distance = false,
+	Health = false,
+}
+local COVER_CHECK_ENABLED = false
+local NIGHT_VISION_ENABLED = false
+local SPEED_BOOST_ENABLED = false
+local HIGH_JUMP_ENABLED = false
+local GRAVITY_CHANGED = false
+local ENEMY_VIEW_WARNING = false
+local WIDE_ANGLE_ENABLED = false
+local LOCK_FPS_ENABLED = false
+local originalBrightness = Lighting.Brightness
+local originalAmbient = Lighting.Ambient
+local originalGravity = Workspace.Gravity
+local PLAYER_COUNT_ENABLED = false
+local ANTENNA_ENABLED = false
+local EXTRACT_ESP_ENABLED = false
+local BOT_ESP_ENABLED = false
+
+local aimLine = nil
+
+local hookedRemoteFunctions = {}
+local listeningForNew = false
+
+local function getEventContainers()
+	return {
+		Workspace,
+		game:GetService("ReplicatedStorage"),
+		Players,
+		Lighting
+	}
+end
+
+local function shouldSkipEvent(event)
+	local name = event.Name:lower()
+	local skipKeywords = {
+		"chat", "ping", "animation", "reload", "switch", "equip", "inventory", "ammo",
+		"sync", "pose", "status", "lobby", "menu", "score", "killfeed", "announce",
+		"voice", "team", "round", "leaderboard"
+	}
+	for _, kw in ipairs(skipKeywords) do
+		if name:find(kw) then return true end
+	end
+	return false
+end
+
+local function shouldSkipFunction(func)
+	return shouldSkipEvent(func)
+end
+
+local function modifyArgs(args)
+	local bestHead = getNearestEnemyHead()
+	if not bestHead then return args end
+
+	local char = LocalPlayer.Character
+	if not char then return args end
+	local tool = char:FindFirstChildOfClass("Tool")
+	local gunPart = nil
+	if tool then
+		gunPart = tool:FindFirstChild("Handle") or tool:FindFirstChild("Barrel") or tool:FindFirstChildOfClass("BasePart")
+	end
+
+	local origin = gunPart and gunPart.Position or Camera.CFrame.Position
+	local direction = (bestHead.Position - origin).Unit
+
+	local vecCount = 0
+	for i, arg in ipairs(args) do
+		if typeof(arg) == "Vector3" then
+			vecCount = vecCount + 1
+			if vecCount == 1 then
+				args[i] = bestHead.Position
+			elseif vecCount == 2 then
+				args[i] = direction
+				break
+			end
+		end
+	end
+	return args
+end
+
+local function hookRemoteFunction(remoteFunc)
+	if not remoteFunc:IsA("RemoteFunction") or hookedRemoteFunctions[remoteFunc] then return end
+	local oldInvoke = remoteFunc.InvokeServer
+	hookedRemoteFunctions[remoteFunc] = oldInvoke
+	remoteFunc.InvokeServer = function(self, ...)
+		local args = {...}
+		if AIMBOT_ENABLED and ScriptActive and not shouldSkipFunction(self) then
+			args = modifyArgs(args)
+		end
+		return oldInvoke(self, table.unpack(args))
+	end
+end
+
+local function unhookRemoteFunction(remoteFunc)
+	if hookedRemoteFunctions[remoteFunc] then
+		remoteFunc.InvokeServer = hookedRemoteFunctions[remoteFunc]
+		hookedRemoteFunctions[remoteFunc] = nil
+	end
+end
+
+local function hookAllRemoteFunctions()
+	for _, container in ipairs(getEventContainers()) do
+		for _, descendant in ipairs(container:GetDescendants()) do
+			if descendant:IsA("RemoteFunction") then
+				hookRemoteFunction(descendant)
+			end
+		end
+	end
+end
+
+local function unhookAllRemoteFunctions()
+	for remoteFunc, _ in pairs(hookedRemoteFunctions) do
+		remoteFunc.InvokeServer = hookedRemoteFunctions[remoteFunc]
+	end
+	hookedRemoteFunctions = {}
+end
+
+local function startListeningForNewEvents()
+	if listeningForNew then return end
+	listeningForNew = true
+	for _, container in ipairs(getEventContainers()) do
+		container.DescendantAdded:Connect(function(descendant)
+			if AIMBOT_ENABLED then
+				if descendant:IsA("RemoteFunction") then
+					hookRemoteFunction(descendant)
+				end
+			end
+		end)
+	end
+end
+
+local function applyRemoteHooks(enabled)
+	if enabled then
+		hookAllRemoteFunctions()
+		startListeningForNewEvents()
+	else
+		unhookAllRemoteFunctions()
+	end
+end
+
+local playerCountDrawing = nil
+if DrawingAvailable then
+	pcall(function()
+		playerCountDrawing = Drawing.new("Text")
+		playerCountDrawing.Text = ""
+		playerCountDrawing.Color = Color3.new(1, 1, 1)
+		playerCountDrawing.Size = 16
+		playerCountDrawing.Center = true
+		playerCountDrawing.Outline = true
+		playerCountDrawing.OutlineColor = Color3.new(0, 0, 0)
+		playerCountDrawing.Visible = false
+	end)
+end
+
+local antennaLinePool = {}
+if DrawingAvailable then
+	for i = 1, 20 do
+		pcall(function()
+			local line = Drawing.new("Line")
+			line.Thickness = 0.3
+			line.Color = Color3.new(1, 1, 1)
+			line.Visible = false
+			table.insert(antennaLinePool, line)
+		end)
+	end
+end
+
+local extractESPObjects = {}
+local botESPObjects = {}
+
+local function applyNightVision()
+	if NIGHT_VISION_ENABLED then
+		Lighting.Brightness = 10
+		Lighting.Ambient = Color3.new(0.6, 0.8, 1.0)
+	else
+		Lighting.Brightness = originalBrightness
+		Lighting.Ambient = originalAmbient
+	end
+end
+
+local function applySpeed()
+	local char = LocalPlayer.Character
+	if char then
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		if hum then
+			hum.WalkSpeed = SPEED_BOOST_ENABLED and 22 or 16
+		end
+	end
+end
+
+local function applyJump()
+	local char = LocalPlayer.Character
+	if char then
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		if hum then
+			hum.JumpPower = HIGH_JUMP_ENABLED and 75 or 50
+		end
+	end
+end
+
+local function applyGravity()
+	Workspace.Gravity = GRAVITY_CHANGED and 150 or originalGravity
+end
+
+local COLORS = {
+	Color3.fromRGB(255,0,0),
+	Color3.fromRGB(255,127,0),
+	Color3.fromRGB(255,255,0),
+	Color3.fromRGB(0,255,0),
+	Color3.fromRGB(0,255,255),
+	Color3.fromRGB(0,0,255),
+	Color3.fromRGB(127,0,255)
+}
+local colorIndex = 1
+
+local FovGui = Instance.new("ScreenGui")
+FovGui.Name = "FOVCircle"
+FovGui.Parent = game:GetService("CoreGui")
+FovGui.IgnoreGuiInset = true
+
+local lines = {}
+for i = 1, SEGMENTS do
+	local l = Instance.new("Frame")
+	l.Size = UDim2.new(0, 1, 0, 1)
+	l.BackgroundColor3 = COLORS[1]
+	l.BorderSizePixel = 0
+	l.Visible = false
+	l.Parent = FovGui
+	lines[i] = l
+end
+
+local CoverText = Instance.new("TextLabel")
+CoverText.Size = UDim2.new(0, 200, 0, 50)
+CoverText.Position = UDim2.new(0.5, 150, 0.5, -25)
+CoverText.AnchorPoint = Vector2.new(0, 0.5)
+CoverText.BackgroundTransparency = 1
+CoverText.Text = ""
+CoverText.TextColor3 = Color3.fromRGB(255, 255, 255)
+CoverText.Font = Enum.Font.GothamBold
+CoverText.TextSize = 13
+CoverText.TextStrokeTransparency = 0.8
+CoverText.Parent = FovGui
+
+local function applyFovColor(col)
+	for _, l in ipairs(lines) do
+		l.BackgroundColor3 = col
+	end
+end
+
+task.spawn(function()
+	while true do
+		if not ScriptActive then break end
+		if AIMBOT_ENABLED then
+			colorIndex = colorIndex % #COLORS + 1
+			applyFovColor(COLORS[colorIndex])
+		end
+		task.wait(1)
+	end
+end)
+
+local function updateCircle()
+	if not ScriptActive then return end
+	if not SHOW_CIRCLE or not AIMBOT_ENABLED then
+		for _, l in ipairs(lines) do
+			l.Visible = false
+		end
+		return
+	end
+	local center = Camera.ViewportSize / 2
+	for i = 1, SEGMENTS do
+		local a = (i - 1) / SEGMENTS * 2 * math.pi
+		local px = center.X + math.cos(a) * CIRCLE_RADIUS
+		local py = center.Y + math.sin(a) * CIRCLE_RADIUS
+		lines[i].Position = UDim2.new(0, px, 0, py)
+		lines[i].Visible = true
+	end
+end
+
+function getNearestEnemyHead()
+	local best = nil
+	local bestAngle = FOV_ANGLE
+	local camPos = Camera.CFrame.Position
+	local camLook = Camera.CFrame.LookVector
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer and plr.Character then
+			local head = plr.Character:FindFirstChild("Head")
+			local humanoid = plr.Character:FindFirstChildOfClass("Humanoid")
+			if head and humanoid and humanoid.Health > 0 then
+				local dir = (head.Position - camPos).Unit
+				local dot = camLook:Dot(dir)
+				if dot > 1 then dot = 1 elseif dot < -1 then dot = -1 end
+				local angle = math.deg(math.acos(dot))
+				if angle <= bestAngle then
+					bestAngle = angle
+					best = head
+				end
+			end
+		end
+	end
+	return best
+end
+
+local function getNearestEnemy()
+	local nearest = nil
+	local nearestDist = math.huge
+	local center = Camera.ViewportSize / 2
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player ~= LocalPlayer and player.Character then
+			local char = player.Character
+			local root = char:FindFirstChild("HumanoidRootPart")
+			local humanoid = char:FindFirstChildOfClass("Humanoid")
+			if root and humanoid and humanoid.Health > 0 then
+				local screenPos, onScreen = Camera:WorldToViewportPoint(root.Position)
+				if onScreen then
+					local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+					if dist < nearestDist then
+						nearestDist = dist
+						nearest = player
+					end
+				end
+			end
+		end
+	end
+	return nearest
+end
+
+local function checkCover(targetPlayer)
+	local char = targetPlayer.Character
+	local targetPart = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso") or char:FindFirstChild("HumanoidRootPart")
+	if not targetPart then return nil end
+	local cameraPos = Camera.CFrame.Position
+	local direction = (targetPart.Position - cameraPos)
+	local rayLength = direction.Magnitude
+	local rayUnit = direction.Unit
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+	rayParams.FilterDescendantsInstances = {LocalPlayer.Character, targetPlayer.Character}
+	local success, result = pcall(function()
+		return Workspace:Raycast(cameraPos, rayUnit * rayLength, rayParams)
+	end)
+	if not success then
+		local hit = Workspace:FindPartOnRayWithIgnoreList(Ray.new(cameraPos, rayUnit * rayLength), {LocalPlayer.Character, targetPlayer.Character})
+		if hit then
+			if hit:IsDescendantOf(targetPlayer.Character) then
+				return false
+			else
+				return true
+			end
+		else
+			return false
+		end
+	else
+		if result then
+			if result.Instance:IsDescendantOf(targetPlayer.Character) then
+				return false
+			else
+				return true
+			end
+		else
+			return false
+		end
+	end
+end
+
+local function updateCoverDisplay()
+	if not COVER_CHECK_ENABLED then
+		CoverText.Text = ""
+		return
+	end
+	local nearest = getNearestEnemy()
+	if nearest then
+		local hasCover = checkCover(nearest)
+		if hasCover ~= nil then
+			CoverText.Text = nearest.Name .. (hasCover and " 有掩体" or " 无掩体")
+			CoverText.TextColor3 = hasCover and Color3.fromRGB(255, 100, 100) or Color3.fromRGB(100, 255, 100)
+		else
+			CoverText.Text = nearest.Name .. " 检测失败"
+		end
+	else
+		CoverText.Text = "无敌人"
+	end
+end
+
+local meta = getrawmetatable(game)
+local old = meta.__namecall
+setreadonly(meta, false)
+meta.__namecall = newcclosure(function(self, ...)
+	local method = getnamecallmethod()
+	local args = {...}
+	if not checkcaller() and self == Workspace and (method == "Raycast" or method == "Spherecast" or method == "Blockcast" or method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist") then
+		if not ScriptActive or not AIMBOT_ENABLED then
+			return old(self, ...)
+		end
+		local origin, direction
+		if method == "Raycast" then
+			origin = args[1]
+			direction = args[2]
+		elseif method == "Spherecast" then
+			origin = args[1]
+			direction = args[3]
+		elseif method == "Blockcast" then
+			origin = args[1].Position
+			direction = args[3]
+		else
+			local ray = args[1]
+			if typeof(ray) == "Ray" then
+				origin = ray.Origin
+				direction = ray.Direction
+			end
+		end
+		if origin and direction then
+			local bestHead = getNearestEnemyHead()
+			if bestHead then
+				local hitPos = bestHead.Position
+				local norm = (hitPos - origin).Unit
+				local dist = (hitPos - origin).Magnitude
+				if method == "Raycast" or method == "Spherecast" or method == "Blockcast" then
+					return {
+						Instance = bestHead,
+						Position = hitPos,
+						Normal = norm,
+						Material = Enum.Material.Plastic,
+						Distance = dist
+					}
+				else
+					return bestHead, hitPos, norm
+				end
+			end
+		end
+	end
+	return old(self, ...)
+end)
+setreadonly(meta, true)
+
+local R6_CONNECTIONS = {
+	{"Head", "Torso"},
+	{"Torso", "Left Arm"},
+	{"Torso", "Right Arm"},
+	{"Torso", "Left Leg"},
+	{"Torso", "Right Leg"},
+	{"Left Arm", "LeftHand"},
+	{"Right Arm", "RightHand"},
+	{"Left Leg", "LeftFoot"},
+	{"Right Leg", "RightFoot"},
+}
+
+local R15_CONNECTIONS = {
+	{"Head", "UpperTorso"},
+	{"UpperTorso", "LowerTorso"},
+	{"UpperTorso", "LeftUpperArm"},
+	{"LeftUpperArm", "LeftLowerArm"},
+	{"LeftLowerArm", "LeftHand"},
+	{"UpperTorso", "RightUpperArm"},
+	{"RightUpperArm", "RightLowerArm"},
+	{"RightLowerArm", "RightHand"},
+	{"LowerTorso", "LeftUpperLeg"},
+	{"LeftUpperLeg", "LeftLowerLeg"},
+	{"LeftLowerLeg", "LeftFoot"},
+	{"LowerTorso", "RightUpperLeg"},
+	{"RightUpperLeg", "RightLowerLeg"},
+	{"RightLowerLeg", "RightFoot"},
+}
+
+local function getSkeletonConnections(humanoid)
+	if humanoid.RigType == Enum.HumanoidRigType.R6 then
+		return R6_CONNECTIONS
+	elseif humanoid.RigType == Enum.HumanoidRigType.R15 then
+		return R15_CONNECTIONS
+	end
+	return R15_CONNECTIONS
+end
+
+local espPool = {}
+
+local function getOrCreateESP(player)
+	if espPool[player] then return espPool[player] end
+	if not DrawingAvailable then return nil end
+	local item = {}
+	pcall(function()
+		local name = Drawing.new("Text")
+		name.Size = 10
+		name.Color = Color3.fromRGB(255, 0, 0)
+		name.Center = true
+		name.Outline = true
+		name.OutlineColor = Color3.new(0,0,0)
+		name.Visible = false
+		item.name = name
+	end)
+	pcall(function()
+		local dist = Drawing.new("Text")
+		dist.Size = 10
+		dist.Color = Color3.fromRGB(255, 0, 0)
+		dist.Center = true
+		dist.Outline = true
+		dist.OutlineColor = Color3.new(0,0,0)
+		dist.Visible = false
+		item.dist = dist
+	end)
+	pcall(function()
+		local health = Drawing.new("Text")
+		health.Size = 10
+		health.Color = Color3.fromRGB(255, 0, 0)
+		health.Center = true
+		health.Outline = true
+		health.OutlineColor = Color3.new(0,0,0)
+		health.Visible = false
+		item.health = health
+	end)
+	local skeletonLines = {}
+	if DrawingAvailable then
+		for _ = 1, #R15_CONNECTIONS do
+			pcall(function()
+				local line = Drawing.new("Line")
+				line.Thickness = 1
+				line.Color = COLORS[colorIndex]
+				line.Visible = false
+				table.insert(skeletonLines, line)
+			end)
+		end
+	end
+	item.skeletonLines = skeletonLines
+	espPool[player] = item
+	return item
+end
+
+local function hideAllESP()
+	for _, item in pairs(espPool) do
+		if item.name then item.name.Visible = false end
+		if item.dist then item.dist.Visible = false end
+		if item.health then item.health.Visible = false end
+		if item.skeletonLines then
+			for _, l in ipairs(item.skeletonLines) do l.Visible = false end
+		end
+	end
+end
+
+local function getPart(char, name)
+	return char:FindFirstChild(name)
+end
+
+local function updateESP()
+	if not ESP_ENABLED or not DrawingAvailable then
+		hideAllESP()
+		return
+	end
+	local players = Players:GetPlayers()
+	local activePlayers = {}
+	for _, plr in ipairs(players) do
+		if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChildOfClass("Humanoid") then
+			table.insert(activePlayers, plr)
+		end
+	end
+	for plr, item in pairs(espPool) do
+		if not table.find(activePlayers, plr) then
+			pcall(function() if item.name then item.name:Remove() end end)
+			pcall(function() if item.dist then item.dist:Remove() end end)
+			pcall(function() if item.health then item.health:Remove() end end)
+			if item.skeletonLines then
+				for _, l in ipairs(item.skeletonLines) do pcall(function() l:Remove() end) end
+			end
+			espPool[plr] = nil
+		end
+	end
+	for _, item in pairs(espPool) do
+		if item.name then item.name.Visible = false end
+		if item.dist then item.dist.Visible = false end
+		if item.health then item.health.Visible = false end
+		if item.skeletonLines then
+			for _, l in ipairs(item.skeletonLines) do l.Visible = false end
+		end
+	end
+	for _, plr in ipairs(activePlayers) do
+		local char = plr.Character
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		if hum and hum.Health > 0 then
+			local item = getOrCreateESP(plr)
+			if not item then continue end
+			local head = char:FindFirstChild("Head")
+			local root = char:FindFirstChild("HumanoidRootPart")
+			if head and root then
+				local screenHead = Camera:WorldToViewportPoint(head.Position)
+				if screenHead.Z > 0 then
+					local rootPos, rootOnScreen = Camera:WorldToViewportPoint(root.Position)
+					if rootOnScreen then
+						if ESP_SETTINGS.Name and item.name then
+							item.name.Text = plr.Name
+							item.name.Position = Vector2.new(rootPos.X, rootPos.Y - 32)
+							item.name.Visible = true
+						end
+						if ESP_SETTINGS.Distance and item.dist then
+							local dist = (Camera.CFrame.Position - root.Position).Magnitude
+							item.dist.Text = string.format("%.1f M", dist)
+							item.dist.Position = Vector2.new(rootPos.X, rootPos.Y - 22)
+							item.dist.Visible = true
+						end
+						if ESP_SETTINGS.Health and item.health then
+							item.health.Text = string.format("%.0f HP", hum.Health)
+							item.health.Position = Vector2.new(rootPos.X, rootPos.Y - 12)
+							item.health.Visible = true
+						end
+					else
+						if item.name then item.name.Visible = false end
+						if item.dist then item.dist.Visible = false end
+						if item.health then item.health.Visible = false end
+					end
+				end
+			end
+			if ESP_SETTINGS.Skeleton and item.skeletonLines then
+				local connections = getSkeletonConnections(hum)
+				for i, conn in ipairs(connections) do
+					local part1 = getPart(char, conn[1])
+					local part2 = getPart(char, conn[2])
+					local line = item.skeletonLines[i]
+					if part1 and part2 and line then
+						local pos1 = Camera:WorldToViewportPoint(part1.Position)
+						local pos2 = Camera:WorldToViewportPoint(part2.Position)
+						if pos1.Z > 0 or pos2.Z > 0 then
+							line.From = Vector2.new(pos1.X, pos1.Y)
+							line.To = Vector2.new(pos2.X, pos2.Y)
+							line.Visible = true
+						end
+					end
+				end
+				for i = #connections + 1, #item.skeletonLines do
+					item.skeletonLines[i].Visible = false
+				end
+			end
+		end
+	end
+	for _, item in pairs(espPool) do
+		if item.name then item.name.Color = Color3.fromRGB(255, 0, 0) end
+		if item.dist then item.dist.Color = Color3.fromRGB(255, 0, 0) end
+		if item.health then item.health.Color = Color3.fromRGB(255, 0, 0) end
+		if item.skeletonLines then
+			for _, l in ipairs(item.skeletonLines) do l.Color = COLORS[colorIndex] end
+		end
+	end
+end
+
+local function getTopScreenPos(part)
+	local cf = part.CFrame
+	local size = part.Size
+	local half = size / 2
+	local corners = {
+		cf:PointToWorldSpace(Vector3.new(-half.X, half.Y, -half.Z)),
+		cf:PointToWorldSpace(Vector3.new( half.X, half.Y, -half.Z)),
+		cf:PointToWorldSpace(Vector3.new(-half.X, half.Y, half.Z)),
+		cf:PointToWorldSpace(Vector3.new( half.X, half.Y, half.Z)),
+	}
+	local minX, minY = math.huge, math.huge
+	local allBehind = true
+	for _, p in ipairs(corners) do
+		local vec, onScreen = Camera:WorldToViewportPoint(p)
+		if onScreen then
+			allBehind = false
+		end
+		if vec.X < minX then minX = vec.X end
+		if vec.Y < minY then minY = vec.Y end
+	end
+	if allBehind then return nil end
+	return Vector2.new(minX, minY)
+end
+
+local function scanExtractESP()
+	if not DrawingAvailable then return end
+	for part, txt in pairs(extractESPObjects) do
+		if not part.Parent or not string.find(part.Name, "Exit", 1, true) then
+			pcall(txt.Remove, txt)
+			extractESPObjects[part] = nil
+		end
+	end
+	for _, part in ipairs(Workspace:GetDescendants()) do
+		if part:IsA("BasePart") and not part:IsA("Terrain") and string.find(part.Name, "Exit", 1, true) then
+			if not extractESPObjects[part] then
+				pcall(function()
+					local txt = Drawing.new("Text")
+					txt.Size = 10
+					txt.Color = Color3.fromRGB(0, 255, 0)
+					txt.Center = true
+					txt.Outline = true
+					txt.OutlineColor = Color3.fromRGB(0,0,0)
+					txt.Visible = true
+					extractESPObjects[part] = txt
+				end)
+			end
+		end
+	end
+end
+
+local function scanBotESP()
+	if not DrawingAvailable then return end
+	for part, txt in pairs(botESPObjects) do
+		if not part.Parent or not string.find(part.Name, "Handle", 1, true) then
+			pcall(txt.Remove, txt)
+			botESPObjects[part] = nil
+		end
+	end
+	for _, part in ipairs(Workspace:GetDescendants()) do
+		if part:IsA("BasePart") and not part:IsA("Terrain") and string.find(part.Name, "Handle", 1, true) then
+			if not botESPObjects[part] then
+				pcall(function()
+					local txt = Drawing.new("Text")
+					txt.Size = 10
+					txt.Color = Color3.fromRGB(0, 150, 255)
+					txt.Center = true
+					txt.Outline = true
+					txt.OutlineColor = Color3.fromRGB(0,0,0)
+					txt.Visible = true
+					botESPObjects[part] = txt
+				end)
+			end
+		end
+	end
+end
+
+local function updateExtractBotESP()
+	if not ScriptActive or not DrawingAvailable then return end
+	if not ESP_ENABLED then
+		for _, txt in pairs(extractESPObjects) do txt.Visible = false end
+		for _, txt in pairs(botESPObjects) do txt.Visible = false end
+		return
+	end
+	local playerPos = LocalPlayer.Character and LocalPlayer.Character.PrimaryPart and LocalPlayer.Character.PrimaryPart.Position or Vector3.zero
+	if EXTRACT_ESP_ENABLED then
+		for part, txt in pairs(extractESPObjects) do
+			if part.Parent then
+				local topPos = getTopScreenPos(part)
+				if topPos then
+					local dist = (part.Position - playerPos).Magnitude
+					txt.Position = Vector2.new(topPos.X, topPos.Y - 8)
+					txt.Text = part.Name .. " " .. string.format("%.0fm", dist)
+					txt.Visible = true
+				else
+					txt.Visible = false
+				end
+			end
+		end
+	else
+		for _, txt in pairs(extractESPObjects) do txt.Visible = false end
+	end
+	if BOT_ESP_ENABLED then
+		for part, txt in pairs(botESPObjects) do
+			if part.Parent then
+				local topPos = getTopScreenPos(part)
+				if topPos then
+					local dist = (part.Position - playerPos).Magnitude
+					txt.Position = Vector2.new(topPos.X, topPos.Y - 8)
+					txt.Text = part.Name .. " " .. string.format("%.0fm", dist)
+					txt.Visible = true
+				else
+					txt.Visible = false
+				end
+			end
+		end
+	else
+		for _, txt in pairs(botESPObjects) do txt.Visible = false end
+	end
+end
+
+coroutine.wrap(function()
+	while ScriptActive do
+		task.wait(2)
+		if DrawingAvailable then
+			if EXTRACT_ESP_ENABLED then scanExtractESP() end
+			if BOT_ESP_ENABLED then scanBotESP() end
+		end
+	end
+end)()
+
+local EnemyViewGui = Instance.new("ScreenGui")
+EnemyViewGui.Name = "EnemyViewWarning"
+EnemyViewGui.Parent = game:GetService("CoreGui")
+EnemyViewGui.IgnoreGuiInset = true
+
+local EnemyViewLabel = Instance.new("TextLabel")
+EnemyViewLabel.BackgroundTransparency = 1
+EnemyViewLabel.Size = UDim2.new(0, 500, 0, 50)
+EnemyViewLabel.Position = UDim2.new(0.5, 0, 0.85, 0)
+EnemyViewLabel.AnchorPoint = Vector2.new(0.5, 0)
+EnemyViewLabel.Font = Enum.Font.GothamBold
+EnemyViewLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
+EnemyViewLabel.TextSize = 13
+EnemyViewLabel.Text = ""
+EnemyViewLabel.TextWrapped = true
+EnemyViewLabel.TextXAlignment = Enum.TextXAlignment.Center
+EnemyViewLabel.Parent = EnemyViewGui
+
+local function checkEnemyView()
+	local player = LocalPlayer.Character
+	if not player then return "" end
+	local myHead = player:FindFirstChild("Head")
+	local myRoot = player:FindFirstChild("HumanoidRootPart")
+	local myPos = myRoot and myRoot.Position or (myHead and myHead.Position)
+	if not myPos then return "" end
+	local visibleEnemies = {}
+	for _, other in ipairs(Players:GetPlayers()) do
+		if other ~= LocalPlayer and other.Character then
+			local char = other.Character
+			local head = char:FindFirstChild("Head")
+			local root = char:FindFirstChild("HumanoidRootPart")
+			if head and root then
+				local dirToMe = (myPos - head.Position).Unit
+				local lookDir = head.CFrame.LookVector
+				local dot = lookDir:Dot(dirToMe)
+				if dot > 0.5 then
+					local rayOrigin = head.Position
+					local rayDirection = (myPos - head.Position)
+					local rayLength = rayDirection.Magnitude
+					local rayUnit = rayDirection.Unit
+					local blocked = false
+					local success, result = pcall(function()
+						local rayParams = RaycastParams.new()
+						rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+						rayParams.FilterDescendantsInstances = {char, player}
+						local hit = workspace:Raycast(rayOrigin, rayUnit * rayLength, rayParams)
+						if hit and hit.Instance then
+							blocked = true
+						end
+					end)
+					if not success then
+						local hit = workspace:FindPartOnRayWithIgnoreList(
+							Ray.new(rayOrigin, rayUnit * rayLength),
+							{char, player}
+						)
+						if hit then blocked = true end
+					end
+					if not blocked then
+						table.insert(visibleEnemies, other.Name)
+					end
+				end
+			end
+		end
+	end
+	if #visibleEnemies == 0 then return "" end
+	return "敌人视野内有我\n敌人: " .. table.concat(visibleEnemies, " | ")
+end
+
+local LBLG = Instance.new("ScreenGui")
+LBLG.Name = "LBLG"
+LBLG.Parent = game:GetService("CoreGui")
+LBLG.Enabled = true
+LBLG.IgnoreGuiInset = true
+
+local LBL = Instance.new("TextLabel")
+LBL.Name = "LBL"
+LBL.Parent = LBLG
+LBL.BackgroundTransparency = 1
+LBL.Position = UDim2.new(0.75,0,0.01,0)
+LBL.Size = UDim2.new(0,140,0,22)
+LBL.Font = Enum.Font.GothamSemibold
+LBL.Text = ""
+LBL.TextColor3 = Color3.new(155,155,155)
+LBL.TextScaled = true
+LBL.TextSize = 12
+LBL.Visible = true
+
+local FPSLabel = Instance.new("TextLabel")
+FPSLabel.Name = "FPSDisplay"
+FPSLabel.Parent = LBLG
+FPSLabel.BackgroundTransparency = 1
+FPSLabel.Position = UDim2.new(0.75, 0, 0.065, 0)
+FPSLabel.Size = UDim2.new(0, 140, 0, 20)
+FPSLabel.Font = Enum.Font.GothamSemibold
+FPSLabel.TextColor3 = Color3.new(155,155,155)
+FPSLabel.TextScaled = true
+FPSLabel.TextSize = 12
+FPSLabel.Visible = true
+
+local frameCount = 0
+local lastTime = tick()
+
+RunService.RenderStepped:Connect(function()
+	if not ScriptActive then return end
+	frameCount = frameCount + 1
+	local now = tick()
+	if now - lastTime >= 1 then
+		FPSLabel.Text = "FPS: " .. frameCount
+		frameCount = 0
+		lastTime = now
+	end
+	if SPEED_BOOST_ENABLED then
+		local char = LocalPlayer.Character
+		if char then
+			local hum = char:FindFirstChildOfClass("Humanoid")
+			if hum then hum.WalkSpeed = 22 end
+		end
+	end
+	if HIGH_JUMP_ENABLED then
+		local char = LocalPlayer.Character
+		if char then
+			local hum = char:FindFirstChildOfClass("Humanoid")
+			if hum then hum.JumpPower = 75 end
+		end
+	end
+	if GRAVITY_CHANGED then
+		Workspace.Gravity = 150
+	end
+	if WIDE_ANGLE_ENABLED then
+		Camera.FieldOfView = 140
+	end
+	if LOCK_FPS_ENABLED then
+		pcall(function() setfpscap(144) end)
+	end
+	if ENEMY_VIEW_WARNING then
+		local text = checkEnemyView()
+		EnemyViewLabel.Text = text
+	else
+		EnemyViewLabel.Text = ""
+	end
+	updateCircle()
+	updateCoverDisplay()
+	updateESP()
+	updateExtractBotESP()
+	if PLAYER_COUNT_ENABLED and ESP_ENABLED and playerCountDrawing then
+		local aliveCount = 0
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChildOfClass("Humanoid") and plr.Character:FindFirstChildOfClass("Humanoid").Health > 0 then
+				aliveCount = aliveCount + 1
+			end
+		end
+		playerCountDrawing.Text = "p: " .. tostring(aliveCount)
+		local screenCenter = Camera.ViewportSize / 2
+		playerCountDrawing.Position = Vector2.new(screenCenter.X, screenCenter.Y - 120)
+		playerCountDrawing.Visible = true
+	elseif playerCountDrawing then
+		playerCountDrawing.Visible = false
+	end
+	if ANTENNA_ENABLED and ESP_ENABLED and #antennaLinePool > 0 then
+		local screenCenter = Camera.ViewportSize / 2
+		local fromPos = Vector2.new(screenCenter.X, screenCenter.Y - 100)
+		local index = 1
+		local players = Players:GetPlayers()
+		for _, plr in ipairs(players) do
+			if plr ~= LocalPlayer and plr.Character then
+				local head = plr.Character:FindFirstChild("Head")
+				if head then
+					local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+					if screenPos.Z > 0 then
+						local line = antennaLinePool[index]
+						if not line then
+							line = Drawing.new("Line")
+							line.Thickness = 0.3
+							line.Color = Color3.new(1, 1, 1)
+							table.insert(antennaLinePool, line)
+						end
+						line.From = fromPos
+						line.To = Vector2.new(screenPos.X, screenPos.Y)
+						line.Visible = true
+						index = index + 1
+					end
+				end
+			end
+		end
+		for i = index, #antennaLinePool do
+			antennaLinePool[i].Visible = false
+		end
+	else
+		for _, line in ipairs(antennaLinePool) do
+			line.Visible = false
+		end
+	end
+	if AIMBOT_ENABLED and aimLine then
+		aimLine.Color = COLORS[colorIndex]
+		local screenCenter = Camera.ViewportSize / 2
+		local nearestHead = nil
+		local minDist = math.huge
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr ~= LocalPlayer and plr.Character then
+				local head = plr.Character:FindFirstChild("Head")
+				local humanoid = plr.Character:FindFirstChildOfClass("Humanoid")
+				if head and humanoid and humanoid.Health > 0 then
+					local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+					if onScreen then
+						local dist = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+						if dist < minDist then
+							minDist = dist
+							nearestHead = {pos = screenPos, head = head}
+						end
+					end
+				end
+			end
+		end
+		if nearestHead then
+			aimLine.From = Vector2.new(screenCenter.X, screenCenter.Y)
+			aimLine.To = Vector2.new(nearestHead.pos.X, nearestHead.pos.Y)
+			aimLine.Visible = true
+		else
+			aimLine.Visible = false
+		end
+	elseif aimLine then
+		aimLine.Visible = false
+	end
+end)
+
+task.spawn(function()
+	while true do
+		if not ScriptActive then break end
+		LBL.Text = "当前时间:"..os.date("%H").."时"..os.date("%M").."分"..os.date("%S")
+		task.wait(1)
+	end
+end)
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+	task.wait(0.5)
+	applySpeed()
+	applyJump()
+	if DrawingAvailable then
+		if EXTRACT_ESP_ENABLED then scanExtractESP() end
+		if BOT_ESP_ENABLED then scanBotESP() end
+	end
+end)
+
+Orion.AncestryChanged:Connect(function()
+	if not Orion.Parent then
+		ScriptActive = false
+		AIMBOT_ENABLED = false
+		applyRemoteHooks(false)
+		ESP_ENABLED = false
+		SHOW_CIRCLE = false
+		COVER_CHECK_ENABLED = false
+		NIGHT_VISION_ENABLED = false
+		SPEED_BOOST_ENABLED = false
+		HIGH_JUMP_ENABLED = false
+		GRAVITY_CHANGED = false
+		WIDE_ANGLE_ENABLED = false
+		LOCK_FPS_ENABLED = false
+		ENEMY_VIEW_WARNING = false
+		EXTRACT_ESP_ENABLED = false
+		BOT_ESP_ENABLED = false
+		Lighting.Brightness = originalBrightness
+		Lighting.Ambient = originalAmbient
+		Workspace.Gravity = originalGravity
+		local char = LocalPlayer.Character
+		if char then
+			local hum = char:FindFirstChildOfClass("Humanoid")
+			if hum then
+				hum.WalkSpeed = 16
+				hum.JumpPower = 50
+			end
+		end
+		if aimLine then
+			aimLine:Remove()
+			aimLine = nil
+		end
+		if FovGui then FovGui:Destroy() end
+		for _, item in pairs(espPool) do
+			pcall(function() if item.name then item.name:Remove() end end)
+			pcall(function() if item.dist then item.dist:Remove() end end)
+			pcall(function() if item.health then item.health:Remove() end end)
+			if item.skeletonLines then
+				for _, l in ipairs(item.skeletonLines) do pcall(function() l:Remove() end) end
+			end
+		end
+		espPool = {}
+		for _, txt in pairs(extractESPObjects) do pcall(txt.Remove, txt) end
+		for _, txt in pairs(botESPObjects) do pcall(txt.Remove, txt) end
+		extractESPObjects = {}
+		botESPObjects = {}
+		if playerCountDrawing then playerCountDrawing:Remove() end
+		for _, line in ipairs(antennaLinePool) do
+			line:Remove()
+		end
+		antennaLinePool = {}
+		if LBLG then LBLG:Destroy() end
+		if EnemyViewGui then EnemyViewGui:Destroy() end
+	end
+end)
+
+local Window = OrionLib:MakeWindow({
+	Name = "BN辅助",
+	HidePremium = false,
+	SaveConfig = true,
+	IntroText = "正在加载脚本",
+	ConfigFolder = "文件存放名"
+})
+
+local Tab = Window:MakeTab({Name = "主页", Icon = "rbxassetid://4483345998", PremiumOnly = false})
+Tab:AddParagraph("作者", "张智杰")
+Tab:AddParagraph("项目三角洲辅助")
+
+local DrawTab = Window:MakeTab({Name = "主要", Icon = "rbxassetid://4483345998", PremiumOnly = false})
+
+local FovSection = DrawTab:AddSection({Name = "子追"})
+
+FovSection:AddToggle({
+	Name = "子追初始化",
+	Default = false,
+	Callback = function(v)
+		AIMBOT_ENABLED = v
+		applyRemoteHooks(v)
+		if v then
+			if DrawingAvailable and not aimLine then
+				aimLine = Drawing.new("Line")
+				aimLine.Thickness = 1
+				aimLine.Visible = false
+			end
+		else
+			if aimLine then
+				aimLine:Remove()
+				aimLine = nil
+			end
+		end
+		OrionLib:MakeNotification({Name = "子追", Content = (v and "已开启（含远程）" or "已关闭"), Time = 1.5})
+	end
+})
+
+FovSection:AddToggle({
+	Name = "显示圆圈",
+	Default = false,
+	Callback = function(v)
+		SHOW_CIRCLE = v
+		OrionLib:MakeNotification({Name = "圆圈", Content = (v and "已显示" or "已隐藏"), Time = 1.5})
+	end
+})
+
+FovSection:AddToggle({
+	Name = "掩体显示",
+	Default = false,
+	Callback = function(v)
+		COVER_CHECK_ENABLED = v
+	end
+})
+
+FovSection:AddToggle({
+	Name = "敌人视野警示",
+	Default = false,
+	Callback = function(v)
+		ENEMY_VIEW_WARNING = v
+	end
+})
+
+local FuncSection = DrawTab:AddSection({Name = "功能"})
+
+FuncSection:AddToggle({
+	Name = "加速",
+	Default = false,
+	Callback = function(v)
+		SPEED_BOOST_ENABLED = v
+		if v then
+			local char = LocalPlayer.Character
+			if char then
+				local hum = char:FindFirstChildOfClass("Humanoid")
+				if hum then hum.WalkSpeed = 22 end
+			end
+		else
+			local char = LocalPlayer.Character
+			if char then
+				local hum = char:FindFirstChildOfClass("Humanoid")
+				if hum then hum.WalkSpeed = 16 end
+			end
+		end
+		OrionLib:MakeNotification({Name = "加速", Content = (v and "已开启" or "已关闭"), Time = 1.5})
+	end
+})
+
+FuncSection:AddToggle({
+	Name = "高跳",
+	Default = false,
+	Callback = function(v)
+		HIGH_JUMP_ENABLED = v
+		if v then
+			local char = LocalPlayer.Character
+			if char then
+				local hum = char:FindFirstChildOfClass("Humanoid")
+				if hum then hum.JumpPower = 75 end
+			end
+		else
+			local char = LocalPlayer.Character
+			if char then
+				local hum = char:FindFirstChildOfClass("Humanoid")
+				if hum then hum.JumpPower = 50 end
+			end
+		end
+		OrionLib:MakeNotification({Name = "高跳", Content = (v and "已开启" or "已关闭"), Time = 1.5})
+	end
+})
+
+FuncSection:AddToggle({
+	Name = "广角",
+	Default = false,
+	Callback = function(v)
+		WIDE_ANGLE_ENABLED = v
+		if v then
+			Camera.FieldOfView = 140
+		else
+			Camera.FieldOfView = 70
+		end
+		OrionLib:MakeNotification({Name = "广角", Content = (v and "已开启 140°" or "已关闭"), Time = 1.5})
+	end
+})
+
+FuncSection:AddToggle({
+	Name = "锁帧",
+	Default = false,
+	Callback = function(v)
+		LOCK_FPS_ENABLED = v
+		if v then
+			pcall(function() setfpscap(144) end)
+		else
+			pcall(function() setfpscap(0) end)
+		end
+		OrionLib:MakeNotification({Name = "锁帧", Content = (v and "已开启 144FPS" or "已关闭"), Time = 1.5})
+	end
+})
+
+FuncSection:AddToggle({
+	Name = "夜视",
+	Default = false,
+	Callback = function(v)
+		NIGHT_VISION_ENABLED = v
+		applyNightVision()
+		OrionLib:MakeNotification({Name = "夜视", Content = (v and "已开启" or "已关闭"), Time = 1.5})
+	end
+})
+
+FuncSection:AddToggle({
+	Name = "重力",
+	Default = false,
+	Callback = function(v)
+		GRAVITY_CHANGED = v
+		applyGravity()
+		OrionLib:MakeNotification({Name = "重力", Content = (v and "已设为150" or "已恢复默认"), Time = 1.5})
+	end
+})
+
+local EspSection = DrawTab:AddSection({Name = "绘制"})
+
+EspSection:AddToggle({
+	Name = "绘制初始化",
+	Default = false,
+	Callback = function(v)
+		ESP_ENABLED = v
+		OrionLib:MakeNotification({Name = "绘制", Content = (v and "已开启" or "已关闭"), Time = 1.5})
+	end
+})
+
+EspSection:AddToggle({
+	Name = "骨骼",
+	Default = false,
+	Callback = function(v)
+		ESP_SETTINGS.Skeleton = v
+		OrionLib:MakeNotification({Name = "骨骼", Content = (v and "已显示" or "已隐藏"), Time = 1.5})
+	end
+})
+
+EspSection:AddToggle({
+	Name = "名字",
+	Default = false,
+	Callback = function(v)
+		ESP_SETTINGS.Name = v
+		OrionLib:MakeNotification({Name = "名字", Content = (v and "已显示" or "已隐藏"), Time = 1.5})
+	end
+})
+
+EspSection:AddToggle({
+	Name = "距离",
+	Default = false,
+	Callback = function(v)
+		ESP_SETTINGS.Distance = v
+		OrionLib:MakeNotification({Name = "距离", Content = (v and "已显示" or "已隐藏"), Time = 1.5})
+	end
+})
+
+EspSection:AddToggle({
+	Name = "血量",
+	Default = false,
+	Callback = function(v)
+		ESP_SETTINGS.Health = v
+		OrionLib:MakeNotification({Name = "血量", Content = (v and "已显示" or "已隐藏"), Time = 1.5})
+	end
+})
+
+EspSection:AddToggle({
+	Name = "人数",
+	Default = false,
+	Callback = function(v)
+		PLAYER_COUNT_ENABLED = v
+		OrionLib:MakeNotification({Name = "人数", Content = (v and "已开启" or "已关闭"), Time = 1.5})
+	end
+})
+
+EspSection:AddToggle({
+	Name = "天线",
+	Default = false,
+	Callback = function(v)
+		ANTENNA_ENABLED = v
+		OrionLib:MakeNotification({Name = "天线", Content = (v and "已开启" or "已关闭"), Time = 1.5})
+	end
+})
+
+EspSection:AddToggle({
+	Name = "撤离点",
+	Default = false,
+	Callback = function(v)
+		EXTRACT_ESP_ENABLED = v
+		if v and DrawingAvailable then scanExtractESP() end
+		OrionLib:MakeNotification({Name = "撤离点", Content = (v and "已开启" or "已关闭"), Time = 1.5})
+	end
+})
+
+EspSection:AddToggle({
+	Name = "机器人",
+	Default = false,
+	Callback = function(v)
+		BOT_ESP_ENABLED = v
+		if v and DrawingAvailable then scanBotESP() end
+		OrionLib:MakeNotification({Name = "机器人", Content = (v and "已开启" or "已关闭"), Time = 1.5})
+	end
+})
